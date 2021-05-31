@@ -17,6 +17,13 @@
 -A FORWARD -s {{ strongswan_network }} -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss {{ 1360 - reduce_mtu|int }}
 {% endif %}
 
+{% if port_forwarding_enabled and ports_to_forward_tcp %}
+-A PREROUTING -i eth0 -p tcp --match multiport --dports {{ ports_to_forward_tcp }} -j MARK --set-mark 2
+{% endif %}
+{% if port_forwarding_enabled and ports_to_forward_udp %}
+-A PREROUTING -i eth0 -p udp --match multiport --dports {{ ports_to_forward_udp }} -j MARK --set-mark 2
+{% endif %}
+
 COMMIT
 
 
@@ -36,9 +43,12 @@ COMMIT
 -A PREROUTING --in-interface {{ ansible_default_ipv4['interface'] }} -p udp --dport {{ wireguard_port_avoid }} -j REDIRECT --to-port {{ wireguard_port_actual }}
 {% endif %}
 # Allow traffic from the VPN network to the outside world, and replies
--A POSTROUTING -s {{ subnets|join(',') }} -m policy --pol none --dir out {{ '-j SNAT --to ' + snat_aipv4 if snat_aipv4 else '-j MASQUERADE' }}
+-A POSTROUTING -s {{ subnets|join(',') }} -o eth0 -m policy --pol none --dir out {{ '-j SNAT --to ' + snat_aipv4 if snat_aipv4 else '-j MASQUERADE' }}
 
-
+{% if port_forwarding_enabled and port_forwarding_destination and port_forwarding_source %}
+-A PREROUTING  --match mark --mark 2 -j DNAT --to {{ port_forwarding_destination }}
+-A POSTROUTING --match mark --mark 2 -d {{ port_forwarding_destination }} -j SNAT --to {{ port_forwarding_source }}
+{% endif %}
 COMMIT
 
 
@@ -80,6 +90,11 @@ COMMIT
 
 # Accept DNS traffic to the local DNS resolver
 -A INPUT -d {{ local_service_ip }} -p udp --dport 53 -j ACCEPT
+
+{% if port_forwarding_enabled and port_forwarding_destination %}
+# Port forward 
+-A FORWARD --match mark --mark 2 -d {{ port_forwarding_destination }} -j ACCEPT
+{% endif %}
 
 # Drop traffic between VPN clients
 -A FORWARD -s {{ subnets|join(',') }} -d {{ subnets|join(',') }} -j {{ "DROP" if BetweenClients_DROP else "ACCEPT" }}
